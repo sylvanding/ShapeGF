@@ -1,56 +1,58 @@
 data:
-  type: datasets.pointflow_datasets
-  dataset_type: shapenet15k
-  num_workers: 2
-  cates: ['all']
+  type: datasets.smlm_datasets
+  data_dir: /repos/datasets/smlm_pc
+  dataset_name: mito_pc_16384_2048.h5
+  num_workers: 4
   tr_max_sample_points: 2048
   te_max_sample_points: 2048
-  data_dir: data/ShapeNetCore.v2.PC15k
-  batch_size: 32
-  dataset_scale: 1
-  normalize_per_shape: False
-  normalize_std_per_axis: False
-  recenter_per_shape: True
+  batch_size: 16
+  dataset_scale: 0.9
+  is_scale_z: True
+  is_random_sample: True
+  noise_points_ratio: 0.0
+  transforms: False
+  # TODO: add transforms params
 
 viz:
-  log_freq: 10  # step
-  viz_freq: 1000  # step
-  save_freq: 25  # epoch
-  val_freq: 500  # epoch
+  log_freq: 20  # step
+  viz_freq: 240  # step
+  save_freq: 50  # epoch
+  val_freq: 1  # epoch
 
 trainer:
+  fast_dev_run: False
   type: trainers.ae_trainer_3D
-  epochs: 1200
+  epochs: 120
   seed: 100
   sigma_begin: 1
   sigma_end: 0.01
   sigma_num: 10
   loss_type: "fix_sigma"
   scale_gt: True
-  surface: True
+  surface: False
   mixture: False
   opt_dec:
     type: 'adam'
-    lr: 1e-3  #  use bs*1e-5/8
+    lr: 1e-5  #  use bs*1e-5/8
     beta1: 0.9
     beta2: 0.999
     momentum: 0.9  # for SGD
     weight_decay: 0.
-    scheduler: linear
-    step_epoch: 1000
-    start_ratio: 0.35
-    duration_ratio: 0.5
+    # scheduler: linear
+    # step_epoch: 1000
+    # start_ratio: 0.35
+    # duration_ratio: 0.5
   opt_enc:
     type: 'adam'
-    lr: 1e-3
+    lr: 1e-5
     beta1: 0.9
     beta2: 0.999
     momentum: 0.9  # for SGD
     weight_decay: 0.
-    scheduler: linear
-    step_epoch: 1000
-    start_ratio: 0.35
-    duration_ratio: 0.5
+    # scheduler: linear
+    # step_epoch: 1000
+    # start_ratio: 0.35
+    # duration_ratio: 0.5
 
 models:
   scorenet:
@@ -72,5 +74,5 @@ models:
 inference:
   step_size_ratio: 1
   num_steps: 10
-  num_points: 2048
+  num_points: 16384
   weight: 1

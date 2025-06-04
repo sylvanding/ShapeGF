@@ -81,5 +81,3 @@ dependencies:
     - protobuf==3.12.4
     - tensorboardx==2.1
     - trimesh==3.8.1
-prefix: /home/gy46/anaconda3/envs/ShapeGF
-

@@ -1,0 +1,14 @@
+h5py
+matplotlib==3.7.1
+open3d==0.15.2
+opencv-python
+tensorboardX==1.9
+transforms3d>=0.3.1
+tqdm
+protobuf==3.20.*
+scipy>=1.5.0
+trimesh>=3.8.1
+pyyaml
+joblib>=0.16.0
+scikit-learn>=0.23.1
+pillow==9.5.0

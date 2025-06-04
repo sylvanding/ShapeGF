@@ -19,14 +19,19 @@ def visualize_point_clouds_3d(pcl_lst, title_lst=None):
     if title_lst is None:
         title_lst = [""] * len(pcl_lst)
 
-    fig = plt.figure(figsize=(3 * len(pcl_lst), 3))
+    fig = plt.figure(figsize=(8 * len(pcl_lst), 8))
     for idx, (pts, title) in enumerate(zip(pcl_lst, title_lst)):
         ax1 = fig.add_subplot(1, len(pcl_lst), 1 + idx, projection='3d')
         ax1.set_title(title)
-        ax1.scatter(pts[:, 0], pts[:, 1], pts[:, 2], s=5)
+        ax1.axis('off')
+        # 使用z轴值作为颜色，从上方视角查看xy平面
+        scatter = ax1.scatter(pts[:, 0], pts[:, 1], pts[:, 2], c=pts[:, 2], cmap=cm.jet, s=0.7)
         ax1.set_xlim(-1, 1)
         ax1.set_ylim(-1, 1)
         ax1.set_zlim(-1, 1)
+        # 设置视角为从上方俯视xy平面
+        ax1.view_init(elev=90, azim=-90)
+    fig.tight_layout(pad=0)
     fig.canvas.draw()
 
     # grab the pixel buffer and dump it into a numpy array

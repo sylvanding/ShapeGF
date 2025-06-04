@@ -140,6 +140,6 @@ def ground_truth_reconstruct_multi(inp, cfg):
 
 def get_prior(batch_size, num_points, inp_dim):
     # -1 to 1, uniform
-    return (torch.rand(batch_size, num_points, inp_dim) * 2 - 1.) * 1.5
+    return (torch.rand(batch_size, num_points, inp_dim) * 2 - 1.) * 1.5  # TODO: should be 1.0?
 
 

@@ -26,7 +26,21 @@ ECCV 2020 (*Spotlight*)
 ## Introduction
 In this work, we propose a novel technique to generate shapes from point cloud data. A point cloud can be viewed as samples from a distribution of 3D points whose density is concentrated near the surface of the shape. Point cloud generation thus amounts to moving randomly sampled points to high-density areas. We generate point clouds by performing stochastic gradient ascent on an unnormalized probability density, thereby moving sampled points toward the high-likelihood regions. Our model directly predicts the gradient of the log density field and can be trained with a simple objective adapted from score-based generative models. We show that our method can reach state-of-the-art performance for point cloud auto-encoding and generation, while also allowing for extraction of a high-quality implicit surface.
 
-## Dependencies
+## Dependencies - new
+```bash
+# Create conda environment with torch 1.8.1 and CUDA 11.1 for NVIDIA 3060Ti
+conda create -n shapegf python=3.8 -y
+conda activate shapegf
+pip install torch==1.8.1+cu111 torchvision==0.9.1+cu111 -f https://download.pytorch.org/whl/torch_stable.html
+pip install -r requirements.txt
+
+# Compile the evaluation metrics
+cd evaluation/pytorch_structural_losses/
+make clean
+make all
+```
+
+## Dependencies - old
 ```bash
 # Create conda environment with torch 1.2.0 and CUDA 10.0
 conda env create -f environment.yml

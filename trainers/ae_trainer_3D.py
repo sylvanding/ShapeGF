@@ -13,11 +13,12 @@ from trainers.utils.utils import get_opt, get_prior, \
 try:
     from evaluation.evaluation_metrics import EMD_CD
     eval_reconstruciton = True
-except:  # noqa
+    print("Eval reconstruction: %s" % eval_reconstruciton)
+except Exception as e:  # noqa
     # Skip evaluation
     eval_reconstruciton = False
-
-
+    raise e
+    
 def score_matching_loss(score_net, shape_latent, tr_pts, sigma):
     bs, num_pts = tr_pts.size(0), tr_pts.size(1)
     sigma = sigma.view(bs, 1, 1)
@@ -45,7 +46,7 @@ class Trainer(BaseTrainer):
         super().__init__(cfg, args)
         self.cfg = cfg
         self.args = args
-        set_random_seed(getattr(self.cfg.trainer, "seed", 666))
+        # set_random_seed(getattr(self.cfg.trainer, "seed", 666))
 
         # The networks
         sn_lib = importlib.import_module(cfg.models.scorenet.type)
@@ -121,6 +122,8 @@ class Trainer(BaseTrainer):
 
         tr_pts = data['tr_points'].cuda()  # (B, #points, 3)smn_ae_trainer.py
         batch_size = tr_pts.size(0)
+        # !important: z_mu is the global descriptor for point cloud
+        # !important: should we use local descriptor?
         z_mu, z_sigma = self.encoder(tr_pts)
         z = z_mu + 0 * z_sigma
 
@@ -163,19 +166,21 @@ class Trainer(BaseTrainer):
         if visualize:
             with torch.no_grad():
                 print("Visualize: %s" % step)
-                gtr = train_data['te_points']  # ground truth point cloud
+                # gtr = train_data['te_points']  # DONE: ground truth point cloud, te for gt?
+                gtr = train_data['complete_pc']
                 inp = train_data['tr_points']  # input for encoder
                 ptb = train_info['x']  # perturbed data
                 num_vis = min(
-                    getattr(self.cfg.viz, "num_vis_samples", 5),
+                    getattr(self.cfg.viz, "num_vis_samples", 1),
                     gtr.size(0))
 
-                print("Recon:")
+                # print("Recon:")
                 rec, rec_list = self.reconstruct(
                     inp[:num_vis].cuda(), num_points=inp.size(1))
-                print("Ground truth recon:")
+                # print("Ground truth recon:")
                 rec_gt, rec_gt_list = ground_truth_reconstruct_multi(
-                    inp[:num_vis].cuda(), self.cfg)
+                    inp[:num_vis].cuda(), self.cfg)  # TODO: inp? or train_data['complete_pc']
+                print("rec_gt: ", rec_gt.shape)
                 # Overview
                 all_imgs = []
                 for idx in range(num_vis):
@@ -207,58 +212,64 @@ class Trainer(BaseTrainer):
         all_ref, all_rec, all_smp, all_ref_denorm = [], [], [], []
         all_rec_gt, all_inp_denorm, all_inp = [], [], []
         for data in tqdm.tqdm(test_loader):
-            ref_pts = data['te_points'].cuda()
+            # ref_pts = data['te_points'].cuda()
+            ref_pts = data['complete_pc'].cuda()
             inp_pts = data['tr_points'].cuda()
             m = data['mean'].cuda()
             std = data['std'].cuda()
             rec_pts, _ = self.reconstruct(inp_pts, num_points=inp_pts.size(1))
 
             # denormalize
-            inp_pts_denorm = inp_pts.clone() * std + m
-            ref_pts_denorm = ref_pts.clone() * std + m
-            rec_pts = rec_pts * std + m
+            # inp_pts_denorm = inp_pts.clone() * std + m
+            # ref_pts_denorm = ref_pts.clone() * std + m
+            # rec_pts = rec_pts * std + m
+            
+            # inp_pts_denorm = inp_pts.clone()
+            # ref_pts_denorm = ref_pts.clone()
 
             all_inp.append(inp_pts)
-            all_inp_denorm.append(inp_pts_denorm.view(*inp_pts.size()))
-            all_ref_denorm.append(ref_pts_denorm.view(*ref_pts.size()))
-            all_rec.append(rec_pts.view(*ref_pts.size()))
+            # all_inp_denorm.append(inp_pts_denorm.view(*inp_pts.size()))
+            # all_ref_denorm.append(ref_pts_denorm.view(*ref_pts.size()))
+            # all_rec.append(rec_pts.view(*ref_pts.size()))
+            all_rec.append(rec_pts)
             all_ref.append(ref_pts)
 
         inp = torch.cat(all_inp, dim=0)
         rec = torch.cat(all_rec, dim=0)
         ref = torch.cat(all_ref, dim=0)
-        ref_denorm = torch.cat(all_ref_denorm, dim=0)
-        inp_denorm = torch.cat(all_inp_denorm, dim=0)
-        for name, arr in [
-            ('inp', inp), ('rec', rec), ('ref', ref),
-            ('ref_denorm', ref_denorm), ('inp_denorm', inp_denorm)]:
-            np.save(
-                os.path.join(
-                    self.cfg.save_dir, 'val', '%s_ep%d.npy' % (name, epoch)),
-                arr.detach().cpu().numpy()
-            )
+        # ref_denorm = torch.cat(all_ref_denorm, dim=0)
+        # inp_denorm = torch.cat(all_inp_denorm, dim=0)
+        # save point clouds
+        # for name, arr in [
+        #     ('inp', inp), ('rec', rec), ('ref', ref),
+        #     ('ref_denorm', ref_denorm), ('inp_denorm', inp_denorm)]:
+        #     np.save(
+        #         os.path.join(
+        #             self.cfg.save_dir, 'val', '%s_ep%d.npy' % (name, epoch)),
+        #         arr.detach().cpu().numpy()
+        #     )
         all_res = {}
 
-        # Oracle CD/EMD, will compute only once
-        if self.oracle_res is None:
-            rec_res = EMD_CD(inp_denorm, ref_denorm, 1)
-            rec_res = {
-                ("val/rec/%s" % k): (v if isinstance(v, float) else v.item())
-                for k, v in rec_res.items()}
-            all_res.update(rec_res)
-            print("Validation oracle (denormalize) Epoch:%d " % epoch, rec_res)
-            self.oracle_res = rec_res
-        else:
-            all_res.update(self.oracle_res)
+        # # Oracle CD/EMD, will compute only once
+        # if self.oracle_res is None:
+        #     rec_res = EMD_CD(inp_denorm, ref_denorm, 1)
+        #     rec_res = {
+        #         ("val/rec/%s" % k): (v if isinstance(v, float) else v.item())
+        #         for k, v in rec_res.items()}
+        #     all_res.update(rec_res)
+        #     print("Validation oracle (denormalize) Epoch:%d " % epoch, rec_res)
+        #     self.oracle_res = rec_res
+        # else:
+        #     all_res.update(self.oracle_res)
 
         # Reconstruction CD/EMD
         all_res = {}
-        rec_res = EMD_CD(rec, ref_denorm, 1)
+        rec_res = EMD_CD(rec, ref, 1)
         rec_res = {
             ("val/rec/%s" % k): (v if isinstance(v, float) else v.item())
             for k, v in rec_res.items()}
         all_res.update(rec_res)
-        print("Validation Recon (denormalize) Epoch:%d " % epoch, rec_res)
+        print("Validation Recon Epoch:%d " % epoch, rec_res)
 
         return all_res
 
@@ -276,6 +287,7 @@ class Trainer(BaseTrainer):
         save_name = "epoch_%s_iters_%s.pt" % (epoch, step)
         path = os.path.join(self.cfg.save_dir, "checkpoints", save_name)
         torch.save(d, path)
+        print("Save model at epoch %d, path %s" % (epoch, path))
 
     def resume(self, path, strict=True, **kwargs):
         ckpt = torch.load(path)

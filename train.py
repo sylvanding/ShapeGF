@@ -7,6 +7,7 @@ import importlib
 import torch.distributed
 from torch.backends import cudnn
 from tensorboardX import SummaryWriter
+import shutil
 from shutil import copy2
 
 
@@ -14,27 +15,27 @@ def get_args():
     # command line args
     parser = argparse.ArgumentParser(
         description='Flow-based Point Cloud Generation Experiment')
-    parser.add_argument('config', type=str,
+    parser.add_argument('--config', type=str, default='config.yaml',
                         help='The configuration file.')
 
     # distributed training
-    parser.add_argument('--world_size', default=1, type=int,
-                        help='Number of distributed nodes.')
-    parser.add_argument('--dist_url', default='tcp://127.0.0.1:9991', type=str,
-                        help='url used to set up distributed training')
-    parser.add_argument('--dist_backend', default='nccl', type=str,
-                        help='distributed backend')
-    parser.add_argument('--distributed', action='store_true',
-                        help='Use multi-processing distributed training to '
-                             'launch N processes per node, which has N GPUs. '
-                             'This is the fastest way to use PyTorch for '
-                             'either single node or multi node data parallel '
-                             'training')
-    parser.add_argument('--rank', default=0, type=int,
-                        help='node rank for distributed training')
-    parser.add_argument('--gpu', default=None, type=int,
-                        help='GPU id to use. None means using all '
-                             'available GPUs.')
+    # parser.add_argument('--world_size', default=1, type=int,
+    #                     help='Number of distributed nodes.')
+    # parser.add_argument('--dist_url', default='tcp://127.0.0.1:9991', type=str,
+    #                     help='url used to set up distributed training')
+    # parser.add_argument('--dist_backend', default='nccl', type=str,
+    #                     help='distributed backend')
+    # parser.add_argument('--distributed', action='store_true',
+    #                     help='Use multi-processing distributed training to '
+    #                          'launch N processes per node, which has N GPUs. '
+    #                          'This is the fastest way to use PyTorch for '
+    #                          'either single node or multi node data parallel '
+    #                          'training')
+    # parser.add_argument('--rank', default=0, type=int,
+    #                     help='node rank for distributed training')
+    # parser.add_argument('--gpu', default=None, type=int,
+    #                     help='GPU id to use. None means using all '
+    #                          'available GPUs.')
 
     # Resume:
     parser.add_argument('--resume', default=False, action='store_true')
@@ -44,6 +45,9 @@ def get_args():
     # Test run:
     parser.add_argument('--test_run', default=False, action='store_true')
     args = parser.parse_args()
+    
+    # set args
+    args.config = 'configs/recon/smlm/mito.yaml'
 
     def dict2namespace(config):
         namespace = argparse.Namespace()
@@ -58,16 +62,23 @@ def get_args():
     # parse config file
 
     with open(args.config, 'r') as f:
-        config = yaml.load(f)
+        config = yaml.load(f, Loader=yaml.SafeLoader)
     config = dict2namespace(config)
 
     #  Create log_name
     cfg_file_name = os.path.splitext(os.path.basename(args.config))[0]
-    run_time = time.strftime('%Y-%b-%d-%H-%M-%S')
+    # run_time = time.strftime('%Y-%b-%d-%H-%M-%S')
+    
     # Currently save dir and log_dir are the same
-    config.log_name = "logs/%s_%s" % (cfg_file_name, run_time)
-    config.save_dir = "logs/%s_%s" % (cfg_file_name, run_time)
-    config.log_dir = "logs/%s_%s" % (cfg_file_name, run_time)
+    config.log_name = "logs/%s" % cfg_file_name
+    config.save_dir = "logs/%s" % cfg_file_name
+    config.log_dir = "logs/%s" % cfg_file_name
+    
+    # clean log dir
+    if os.path.exists(config.log_dir):
+        shutil.rmtree(config.log_dir)
+        print("Clean log dir: %s" % config.log_dir)
+    
     os.makedirs(config.log_dir+'/config')
     copy2(args.config, config.log_dir+'/config')
     return args, config
@@ -77,9 +88,9 @@ def main_worker(cfg, args):
     # basic setup
     cudnn.benchmark = True
 
-    writer = SummaryWriter(logdir=cfg.log_name)
+    writer = SummaryWriter(logdir=os.path.join(cfg.log_name, 'tb_logs'))
     data_lib = importlib.import_module(cfg.data.type)
-    loaders = data_lib.get_data_loaders(cfg.data, args)
+    loaders = data_lib.get_data_loaders(cfg.data, args, fast_dev_run=cfg.trainer.fast_dev_run)
     train_loader = loaders['train_loader']
     test_loader = loaders['test_loader']
     trainer_lib = importlib.import_module(cfg.trainer.type)
@@ -126,11 +137,13 @@ def main_worker(cfg, args):
         if (epoch + 1) % int(cfg.viz.save_freq) == 0 and \
                 int(cfg.viz.save_freq) > 0:
             trainer.save(epoch=epoch, step=step)
+            # print("Save model at epoch %d, path %s" % (epoch, cfg.save_dir))
 
         if (epoch + 1) % int(cfg.viz.val_freq) == 0 and \
                 int(cfg.viz.val_freq) > 0:
-            val_info = trainer.validate(test_loader, epoch=epoch)
-            trainer.log_val(val_info, writer=writer, epoch=epoch)
+            # val_info = trainer.validate(test_loader, epoch=epoch)
+            # trainer.log_val(val_info, writer=writer, epoch=epoch)
+            pass
 
         # Signal the trainer to cleanup now that an epoch has ended
         trainer.epoch_end(epoch, writer=writer)
@@ -140,6 +153,15 @@ def main_worker(cfg, args):
 if __name__ == '__main__':
     # command line args
     args, cfg = get_args()
+    
+    if cfg.trainer.fast_dev_run:
+        cfg.trainer.epochs = 2
+        cfg.data.batch_size = 2
+        cfg.viz.log_freq = 1
+        cfg.viz.viz_freq = 1
+        cfg.viz.save_freq = 1
+        cfg.viz.val_freq = 1
+        print("Fast dev run mode")
 
     print("Arguments:")
     print(args)

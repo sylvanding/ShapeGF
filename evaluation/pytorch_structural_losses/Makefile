@@ -64,15 +64,18 @@ INCLUDE_DIRS += $(BLAS_INCLUDE)
 CXXFLAGS += -MMD -MP
 
 # Complete build flags.
+# !important: -std=c++14
+# !important: for torch 1.8.1, python 3.8, CUDA 11.1, g++ 9.4.0, NVIDIA 3060Ti
 COMMON_FLAGS += $(foreach includedir,$(INCLUDE_DIRS),-I$(includedir)) \
 	     -DTORCH_API_INCLUDE_EXTENSION_H -D_GLIBCXX_USE_CXX11_ABI=0
-CXXFLAGS += -pthread -fPIC -fwrapv -std=c++11 $(COMMON_FLAGS) $(WARNINGS)
-NVCCFLAGS += -std=c++11 -ccbin=$(CXX) -Xcompiler -fPIC $(COMMON_FLAGS)
+CXXFLAGS += -pthread -fPIC -fwrapv -std=c++14 $(COMMON_FLAGS) $(WARNINGS)
+NVCCFLAGS += -std=c++14 -ccbin=$(CXX) -Xcompiler -fPIC $(COMMON_FLAGS)
 
+# !important: build path: build/lib.linux-x86_64-cpython-38/ instead of build/lib.linux-x86_64-3.6/
 all: $(STATIC_LIB)
 	$(PYTHON) setup.py build
-	@ mv build/lib.linux-x86_64-3.6/StructuralLosses ..
-	@ mv build/lib.linux-x86_64-3.6/*.so ../StructuralLosses/
+	@ mv build/lib.linux-x86_64-cpython-38/StructuralLosses ..
+	@ mv build/lib.linux-x86_64-cpython-38/*.so ../StructuralLosses/
 	@- $(RM) -rf $(OBJ_DIR) build objs
 
 $(OBJ_DIR):

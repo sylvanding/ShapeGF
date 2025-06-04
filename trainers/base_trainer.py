@@ -26,9 +26,9 @@ class BaseTrainer():
         if writer is not None:
             for k, v in val_info.items():
                 if step is not None:
-                    writer.add_scalar(k, v, step)
+                    writer.add_scalar('val/' + k, v, step)
                 else:
-                    writer.add_scalar(k, v, epoch)
+                    writer.add_scalar('val/' + k, v, epoch)
 
     def save(self, epoch=None, step=None, appendix=None, **kwargs):
         raise NotImplementedError("Trainer [save] not implemented.")

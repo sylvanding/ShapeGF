@@ -32,7 +32,7 @@ class SingleShape(Dataset):
         vert_center = 0.5 * (self.mesh.vertices.max(axis=0) + self.mesh.vertices.min(axis=0))
         # vert_scale = np.linalg.norm(self.mesh.vertices - vert_center, axis=-1).max()
         vert_scale = (self.mesh.vertices.max(axis=0) - self.mesh.vertices.min(axis=0)).max() * 0.5
-        norm_vert = (self.mesh.vertices - vert_center) / vert_scale
+        norm_vert = (self.mesh.vertices - vert_center) / vert_scale  # normalize to [-1, 1]
         self.mesh = trimesh.Trimesh(vertices=norm_vert, faces=self.mesh.faces)
 
         self.tr_max_sample_points = cfg.tr_max_sample_points

@@ -42,7 +42,7 @@ def EMD_CD(sample_pcs, ref_pcs, batch_size, accelerated_cd=False, reduced=True):
     assert N_sample == N_ref, "REF:%d SMP:%d" % (N_ref, N_sample)
 
     cd_lst = []
-    emd_lst = []
+    # emd_lst = []
     iterator = range(0, N_sample, batch_size)
 
     for b_start in iterator:
@@ -56,19 +56,19 @@ def EMD_CD(sample_pcs, ref_pcs, batch_size, accelerated_cd=False, reduced=True):
             dl, dr = distChamfer(sample_batch, ref_batch)
         cd_lst.append(dl.mean(dim=1) + dr.mean(dim=1))
 
-        emd_batch = emd_approx(sample_batch, ref_batch)
-        emd_lst.append(emd_batch)
+        # emd_batch = emd_approx(sample_batch, ref_batch)
+        # emd_lst.append(emd_batch)
 
     if reduced:
         cd = torch.cat(cd_lst).mean()
-        emd = torch.cat(emd_lst).mean()
+        # emd = torch.cat(emd_lst).mean()
     else:
         cd = torch.cat(cd_lst)
-        emd = torch.cat(emd_lst)
+        # emd = torch.cat(emd_lst)
 
     results = {
         'MMD-CD': cd,
-        'MMD-EMD': emd,
+        # 'MMD-EMD': emd,
     }
     return results
 
