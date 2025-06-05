@@ -1,11 +1,11 @@
 data:
   type: datasets.smlm_datasets
   data_dir: /repos/datasets/smlm_pc
-  dataset_name: mito_pc_16384_2048.h5
+  dataset_name: mt_pc_16384_2048_30_40_5.5.h5  # mito_pc_16384_2048.h5
   num_workers: 4
   tr_max_sample_points: 2048
   te_max_sample_points: 2048
-  batch_size: 16
+  batch_size: 8
   dataset_scale: 0.9
   is_scale_z: True
   is_random_sample: True
@@ -20,9 +20,9 @@ viz:
   val_freq: 1  # epoch
 
 trainer:
-  fast_dev_run: False
+  fast_dev_run: True
   type: trainers.ae_trainer_3D
-  epochs: 120
+  epochs: 240
   seed: 100
   sigma_begin: 1
   sigma_end: 0.01
@@ -65,10 +65,11 @@ models:
     param_likelihood: False
     xyz_condition: True
     z_dim: 256
+    local_feature_dim: 256
   encoder:
     type: models.encoders.l3dp_encoder
     use_deterministic_encoder: True
-    zdim: 256 
+    zdim: 256
     input_dim: 3
 
 inference:

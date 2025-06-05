@@ -44,22 +44,22 @@ class Encoder(nn.Module):
         x = F.relu(self.bn1(self.conv1(x)))
         x = F.relu(self.bn2(self.conv2(x)))
         x = F.relu(self.bn3(self.conv3(x)))
-        x = self.bn4(self.conv4(x))
-        x = torch.max(x, 2, keepdim=True)[0]  # !important: global descriptor for point cloud
-        x = x.view(-1, 512)
+        x_local = self.bn4(self.conv4(x))  # (bs, 512, num_points)
+        x_global = torch.max(x_local, 2, keepdim=True)[0]  # !important: global descriptor for point cloud
+        x_global = x_global.view(-1, 512)
 
         if self.use_deterministic_encoder:
-            # !important: x.shape = (bs, 512), bn is wrong, norm should be applied on each sample
-            ms = F.relu(self.fc_bn1(self.fc1(x)))
+            # !important: x_global.shape = (bs, 512), bn is wrong, norm should be applied on each sample
+            ms = F.relu(self.fc_bn1(self.fc1(x_global)))
             ms = F.relu(self.fc_bn2(self.fc2(ms)))
             ms = self.fc3(ms)
             m, v = ms, 0
         else:
-            m = F.relu(self.fc_bn1_m(self.fc1_m(x)))
+            m = F.relu(self.fc_bn1_m(self.fc1_m(x_global)))
             m = F.relu(self.fc_bn2_m(self.fc2_m(m)))
             m = self.fc3_m(m)
-            v = F.relu(self.fc_bn1_v(self.fc1_v(x)))
+            v = F.relu(self.fc_bn1_v(self.fc1_v(x_global)))
             v = F.relu(self.fc_bn2_v(self.fc2_v(v)))
             v = self.fc3_v(v)
 
-        return m, v
+        return m, v, x_local

@@ -46,7 +46,7 @@ class ResnetBlockConv1d(nn.Module):
         # Initialization
         nn.init.zeros_(self.fc_1.weight)
 
-    def forward(self, x, c):
+    def forward(self, x, c_global_local):
         net = self.fc_0(self.actvn(self.bn_0(x)))
         dx = self.fc_1(self.actvn(self.bn_1(net)))
 
@@ -54,8 +54,8 @@ class ResnetBlockConv1d(nn.Module):
             x_s = self.shortcut(x)
         else:
             x_s = x
-
-        out = x_s + dx + self.fc_c(c)
+        
+        out = x_s + dx + self.fc_c(c_global_local)
 
         return out
 
@@ -63,48 +63,75 @@ class ResnetBlockConv1d(nn.Module):
 class Decoder(nn.Module):
     """ Decoder conditioned by adding.
 
-    Example configuration:
-        z_dim: 128
+    Example configuration for scorenet_cfg (cfg.models.scorenet):
+        z_dim: 128 # This is decoder's internal z_dim, not directly used for concat layer sizing if different from encoder.
+        dim: 3 # xyz dimension
         hidden_size: 256
         n_blocks: 5
-        out_dim: 3  # we are outputting the gradient
-        sigma_condition: True
-        xyz_condition: True
+        out_dim: 3
+    Additional needed from overall_cfg (cfg):
+        overall_cfg.models.encoder.zdim
+    Implicit:
+        Local feature dimension from encoder is 512.
     """
-    def __init__(self, _, cfg):
+    def __init__(self, overall_cfg, scorenet_cfg): # overall_cfg is the full config, scorenet_cfg is cfg.models.scorenet
         super().__init__()
-        self.cfg = cfg
-        self.z_dim = z_dim = cfg.z_dim
-        self.dim = dim = cfg.dim
-        self.out_dim = out_dim = cfg.out_dim
-        self.hidden_size = hidden_size = cfg.hidden_size
-        self.n_blocks = n_blocks = cfg.n_blocks
 
-        # Input = Conditional = zdim (shape) + dim (xyz) + 1 (sigma)
-        c_dim = z_dim + dim + 1
-        self.conv_p = nn.Conv1d(c_dim, hidden_size, 1)
+        # Get dimensions from relevant config sources
+        xyz_dim = scorenet_cfg.dim 
+        encoder_z_dim = overall_cfg.models.encoder.zdim
+        
+        # The local feature dimension from the l3dp_encoder.py is fixed at 512 (output of conv4)
+        # It's good practice to make this configurable in overall_cfg.models.encoder if possible,
+        # but for now, we use the known fixed value.
+        encoder_local_feature_dim = 512
+
+        # These are other parameters for the decoder structure
+        self.dim = xyz_dim # Store for use in forward method for 'x'
+        self.out_dim = scorenet_cfg.out_dim
+        hidden_size = scorenet_cfg.hidden_size
+        n_blocks = scorenet_cfg.n_blocks
+        
+        # Calculate the actual dimension of the concatenated conditional vector c_xyz_local
+        # c_xyz_local = cat([p_xyz (xyz_dim), 
+        #                    c_global_expanded (encoder_z_dim + 1 for sigma), 
+        #                    x_local_features (encoder_local_feature_dim)], dim=1)
+        actual_concatenated_cond_dim = xyz_dim + (encoder_z_dim + 1) + encoder_local_feature_dim
+        
+        self.conv_p = nn.Conv1d(actual_concatenated_cond_dim, hidden_size, 1)
+        
+        # ResnetBlockConv1d's c_dim is the dimension of the conditional vector it receives,
+        # which is also actual_concatenated_cond_dim.
         self.blocks = nn.ModuleList([
-            ResnetBlockConv1d(c_dim, hidden_size) for _ in range(n_blocks)
+            ResnetBlockConv1d(actual_concatenated_cond_dim, hidden_size) for _ in range(n_blocks)
         ])
         self.bn_out = nn.BatchNorm1d(hidden_size)
-        self.conv_out = nn.Conv1d(hidden_size, out_dim, 1)
+        self.conv_out = nn.Conv1d(hidden_size, self.out_dim, 1)
         self.actvn_out = nn.ReLU()
 
-    # This should have the same signature as the sig condition one
-    def forward(self, x, c):
+    def forward(self, x, c_global, x_local_features):
         """
-        :param x: (bs, npoints, self.dim) Input coordinate (xyz)
-        :param c: (bs, self.zdim + 1) Shape latent code + sigma
-        :return: (bs, npoints, self.dim) Gradient (self.dim dimension)
+        :param x: (bs, npoints, self.dim) Input coordinate (xyz). self.dim is scorenet_cfg.dim.
+        :param c_global: (bs, overall_cfg.models.encoder.zdim + 1) Global Shape latent code from encoder + sigma.
+        :param x_local_features: (bs, 512, npoints) Local features from encoder.
+        :return: (bs, npoints, self.out_dim) Gradient.
         """
-        p = x.transpose(1, 2)  # (bs, dim, n_points)
-        batch_size, D, num_points = p.size()
+        p = x.transpose(1, 2)  # (bs, self.dim, n_points)
+        batch_size, D_p, num_points = p.size() # D_p is self.dim (xyz_dim)
 
-        c_expand = c.unsqueeze(2).expand(-1, -1, num_points)
-        c_xyz = torch.cat([p, c_expand], dim=1)
-        net = self.conv_p(c_xyz)
+        # c_global is (bs, encoder_z_dim + 1)
+        c_global_expanded = c_global.unsqueeze(2).expand(-1, -1, num_points) # (bs, encoder_z_dim + 1, n_points)
+        
+        # x_local_features is (bs, encoder_local_feature_dim=512, n_points)
+        
+        # Concatenate: p, c_global_expanded, and x_local_features
+        # Resulting dim: self.dim + (encoder_z_dim + 1) + encoder_local_feature_dim
+        c_xyz_local = torch.cat([p, c_global_expanded, x_local_features], dim=1) 
+        
+        net = self.conv_p(c_xyz_local) # self.conv_p now expects actual_concatenated_cond_dim
         for block in self.blocks:
-            net = block(net, c_xyz)
+            # ResNet blocks also receive the full c_xyz_local as conditional input
+            net = block(net, c_xyz_local)
         out = self.conv_out(self.actvn_out(self.bn_out(net))).transpose(1, 2)
         return out
 

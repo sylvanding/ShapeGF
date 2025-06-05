@@ -112,6 +112,7 @@ def main_worker(cfg, args):
         trainer.log_val(val_info, writer=writer, epoch=-1)
 
     # main training loop
+    cfg.trainer.epochs += start_epoch
     print("Start epoch: %d End epoch: %d" % (start_epoch, cfg.trainer.epochs))
     step = 0
     for epoch in range(start_epoch, cfg.trainer.epochs):
@@ -153,6 +154,10 @@ def main_worker(cfg, args):
 if __name__ == '__main__':
     # command line args
     args, cfg = get_args()
+    
+    # pretrained model
+    # args.resume = True
+    # args.pretrained = 'pretrained/epoch_149_iters_18750.pt'
     
     if cfg.trainer.fast_dev_run:
         cfg.trainer.epochs = 2

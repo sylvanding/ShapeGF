@@ -3,6 +3,7 @@ import tqdm
 import torch
 import importlib
 import numpy as np
+import torch.nn.functional as F
 from trainers.base_trainer import BaseTrainer
 from trainers.utils.vis_utils import visualize_point_clouds_3d, \
     visualize_procedure
@@ -19,20 +20,21 @@ except Exception as e:  # noqa
     eval_reconstruciton = False
     raise e
     
-def score_matching_loss(score_net, shape_latent, tr_pts, sigma):
+def score_matching_loss(score_net, shape_latent_global, local_features, tr_pts, sigma):
     bs, num_pts = tr_pts.size(0), tr_pts.size(1)
-    sigma = sigma.view(bs, 1, 1)
-    perturbed_points = tr_pts + torch.randn_like(tr_pts) * sigma
+    sigma_val = sigma.view(bs, 1, 1) # Store original sigma value for lambda_sigma
+    perturbed_points = tr_pts + torch.randn_like(tr_pts) * sigma_val
 
     # For numerical stability, the network predicts the field in a normalized
     # scale (i.e. the norm of the gradient is not scaled by `sigma`)
     # As a result, when computing the ground truth for supervision, we are using
     # its original scale without scaling by `sigma`
-    y_pred = score_net(perturbed_points, shape_latent)  # field (B, #points, 3)
+    # shape_latent_global already contains global_z and sigma
+    y_pred = score_net(perturbed_points, shape_latent_global, local_features)  # field (B, #points, 3)
     y_gtr = - (perturbed_points - tr_pts).view(bs, num_pts, -1)
 
     # The loss for each sigma is weighted
-    lambda_sigma = 1. / sigma
+    lambda_sigma = 1. / sigma_val 
     loss = 0.5 * ((y_gtr - y_pred) ** 2. * lambda_sigma).sum(dim=2).mean()
     return {
         "loss": loss,
@@ -124,17 +126,19 @@ class Trainer(BaseTrainer):
         batch_size = tr_pts.size(0)
         # !important: z_mu is the global descriptor for point cloud
         # !important: should we use local descriptor?
-        z_mu, z_sigma = self.encoder(tr_pts)
-        z = z_mu + 0 * z_sigma
+        z_mu, z_sigma, x_local = self.encoder(tr_pts) # x_local: (bs, local_feature_dim, N)
+        z_global = z_mu + 0 * z_sigma # Not using z_sigma for now, as in original code
 
         # Randomly sample sigma
         labels = torch.randint(
             0, len(self.sigmas), (batch_size,), device=tr_pts.device)
         used_sigmas = torch.tensor(
             np.array(self.sigmas))[labels].float().view(batch_size, 1).cuda()
-        z = torch.cat((z, used_sigmas), dim=1)
+        
+        # Concatenate global_z and sigma for the global part of the conditioning
+        shape_latent_global_sigma = torch.cat((z_global, used_sigmas), dim=1)
 
-        res = score_matching_loss(self.score_net, z, tr_pts, used_sigmas)
+        res = score_matching_loss(self.score_net, shape_latent_global_sigma, x_local, tr_pts, used_sigmas)
         loss = res['loss']
         if not no_update:
             loss.backward()
@@ -176,11 +180,17 @@ class Trainer(BaseTrainer):
 
                 # print("Recon:")
                 rec, rec_list = self.reconstruct(
-                    inp[:num_vis].cuda(), num_points=inp.size(1))
+                    inp[:num_vis].cuda()) # Use configured output points
                 # print("Ground truth recon:")
                 rec_gt, rec_gt_list = ground_truth_reconstruct_multi(
                     inp[:num_vis].cuda(), self.cfg)  # TODO: inp? or train_data['complete_pc']
-                print("rec_gt: ", rec_gt.shape)
+                # For now, disabling rec_gt as ground_truth_reconstruct_multi might not be compatible
+                # with the new local feature setup without modification.
+                # We can add it back if that function is also updated or if it's not essential for this step's visualization.
+                # rec_gt_list = None # Placeholder
+                rec_gt = gtr[:num_vis].clone() # Use ground truth as placeholder for rec_gt visualization
+                
+                print("rec_gt shape (using gtr as placeholder): ", rec_gt.shape)
                 # Overview
                 all_imgs = []
                 for idx in range(num_vis):
@@ -193,10 +203,13 @@ class Trainer(BaseTrainer):
                     'tr_vis/overview', torch.as_tensor(img), step)
 
                 # Reconstruction gt procedure
-                img = visualize_procedure(
-                    self.sigmas, rec_gt_list, gtr, num_vis, self.cfg, "Rec_gt")
-                writer.add_image(
-                    'tr_vis/rec_gt_process', torch.as_tensor(img), step)
+                if rec_gt_list is not None:
+                    img = visualize_procedure(
+                        self.sigmas, rec_gt_list, gtr, num_vis, self.cfg, "Rec_gt")
+                    writer.add_image(
+                        'tr_vis/rec_gt_process', torch.as_tensor(img), step)
+                else:
+                    print("Skipping rec_gt_process visualization as rec_gt_list is None.")
 
                 # Reconstruction procedure
                 img = visualize_procedure(
@@ -210,14 +223,15 @@ class Trainer(BaseTrainer):
 
         print("Validation (reconstruction):")
         all_ref, all_rec, all_smp, all_ref_denorm = [], [], [], []
-        all_rec_gt, all_inp_denorm, all_inp = [], [], []
+        # all_rec_gt, all_inp_denorm, all_inp = [], [], [] # all_rec_gt and all_inp_denorm not used
+        all_inp = []
         for data in tqdm.tqdm(test_loader):
             # ref_pts = data['te_points'].cuda()
             ref_pts = data['complete_pc'].cuda()
             inp_pts = data['tr_points'].cuda()
-            m = data['mean'].cuda()
-            std = data['std'].cuda()
-            rec_pts, _ = self.reconstruct(inp_pts, num_points=inp_pts.size(1))
+            # m = data['mean'].cuda() # Not used after denormalization removal
+            # std = data['std'].cuda() # Not used after denormalization removal
+            rec_pts, _ = self.reconstruct(inp_pts) # Use configured output points
 
             # denormalize
             # inp_pts_denorm = inp_pts.clone() * std + m
@@ -298,43 +312,79 @@ class Trainer(BaseTrainer):
         start_epoch = ckpt['epoch']
         return start_epoch
 
-    def langevin_dynamics(self, z, num_points=2048):
+    def langevin_dynamics(self, z_global, x_local_features_input, target_num_points): # Added x_local_features_input, target_num_points
         with torch.no_grad():
             assert hasattr(self.cfg, "inference")
             step_size_ratio = float(getattr(
                 self.cfg.inference, "step_size_ratio", 1))
             num_steps = int(getattr(self.cfg.inference, "num_steps", 5))
-            num_points = int(getattr(
-                self.cfg.inference, "num_points", num_points))
+            
+            # Determine the channel dimension of local features.
+            # Based on l3dp_encoder.py output and resnet_add.py hardcoded expectation.
+            expected_local_feat_channel_dim = 512
+
+            if x_local_features_input is not None:
+                # Reconstruction case
+                assert x_local_features_input.shape[1] == expected_local_feat_channel_dim, \
+                    (f"Input local features channel dim {x_local_features_input.shape[1]} " +
+                     f"does not match expected {expected_local_feat_channel_dim}")
+
+                if x_local_features_input.shape[2] != target_num_points:
+                    x_local_features_for_decoder = F.interpolate(
+                        x_local_features_input, size=target_num_points, mode='nearest'
+                    )
+                else:
+                    x_local_features_for_decoder = x_local_features_input
+            else:
+                # Sampling case, x_local_features_input is None
+                # Create placeholder local features (e.g., zeros) with target_num_points
+                x_local_features_for_decoder = torch.zeros(
+                    z_global.size(0),
+                    expected_local_feat_channel_dim,
+                    target_num_points
+                ).to(z_global.device)
+
             weight = float(getattr(self.cfg.inference, "weight", 1))
             sigmas = self.sigmas
 
             x_list = []
             self.score_net.eval()
-            x = get_prior(z.size(0), num_points, self.cfg.models.scorenet.dim)
-            x = x.to(z)
+            # Initialize x (points to be refined) with target_num_points
+            x = get_prior(z_global.size(0), target_num_points, self.cfg.models.scorenet.dim)
+            x = x.to(z_global.device)
             x_list.append(x.clone())
-            for sigma in sigmas:
-                sigma = torch.ones((1,)).cuda() * sigma
-                z_sigma = torch.cat((z, sigma.expand(z.size(0), 1)), dim=1)
-                step_size = 2 * sigma ** 2 * step_size_ratio
+
+            for sigma_val in sigmas: # Renamed sigma to sigma_val to avoid conflict
+                sigma_tensor = torch.ones((1,)).to(z_global.device) * sigma_val # Ensure sigma_tensor is on correct device
+                # Prepare global conditioning (z_global + sigma)
+                z_global_sigma = torch.cat((z_global, sigma_tensor.expand(z_global.size(0), 1)), dim=1)
+                
+                step_size = 2 * sigma_val ** 2 * step_size_ratio # Use sigma_val (float)
+                step_size_tensor = torch.tensor(step_size, device=z_global.device) # Convert step_size to tensor
                 for t in range(num_steps):
-                    z_t = torch.randn_like(x) * weight
-                    x += torch.sqrt(step_size) * z_t
-                    grad = self.score_net(x, z_sigma)
-                    grad = grad / sigma ** 2
-                    x += 0.5 * step_size * grad
+                    z_t_noise = torch.randn_like(x) * weight # Renamed z_t to z_t_noise
+                    x = x + torch.sqrt(step_size_tensor) * z_t_noise # Use step_size_tensor
+                    # grad = self.score_net(x, z_global_sigma) # Original call
+                    grad = self.score_net(x, z_global_sigma, x_local_features_for_decoder) # Pass processed local features
+                    grad = grad / sigma_val ** 2 # Use sigma_val (float)
+                    x = x + 0.5 * step_size * grad
                 x_list.append(x.clone())
         return x, x_list
 
     def sample(self, num_shapes=1, num_points=2048):
         with torch.no_grad():
-            z = torch.randn(num_shapes, self.cfg.models.encoder.zdim).cuda()
-            return self.langevin_dynamics(z, num_points=num_points)
+            z_global = torch.randn(num_shapes, self.cfg.models.encoder.zdim).cuda()
+            # For sampling, local features are not derived from an input.
+            # Pass None for x_local_features_input, and target_num_points for langevin_dynamics.
+            return self.langevin_dynamics(z_global, None, target_num_points=num_points)
 
-    def reconstruct(self, inp, num_points=2048):
+    def reconstruct(self, inp, num_points=None): # num_points is target_output_num_points
         with torch.no_grad():
             self.encoder.eval()
-            z, _ = self.encoder(inp)
-            return self.langevin_dynamics(z, num_points=num_points)
+            z_global, _, x_local = self.encoder(inp) # x_local has inp.size(1) points
+            
+            target_output_num_points = num_points if num_points is not None else self.cfg.inference.num_points
+            
+            # Pass x_local (features from input points) and target_output_num_points
+            return self.langevin_dynamics(z_global, x_local, target_num_points=target_output_num_points)
 
